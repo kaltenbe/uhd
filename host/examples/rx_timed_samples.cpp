@@ -11,10 +11,14 @@
 #include <boost/program_options.hpp>
 #include <boost/format.hpp>
 #include <boost/algorithm/string.hpp>
+#include <csignal>
 #include <iostream>
 #include <complex>
 
 namespace po = boost::program_options;
+
+static bool stop_signal_called = false;
+void sig_int_handler(int){stop_signal_called = true;}
 
 int UHD_SAFE_MAIN(int argc, char *argv[]){
     uhd::set_thread_priority_safe();
@@ -66,7 +70,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
         if(chan >= usrp->get_tx_num_channels() or chan >= usrp->get_rx_num_channels()){
             throw std::runtime_error("Invalid channel(s) specified.");
         }
-        else channel_nums.push_back(std::stoi(channel_strings[ch]));
+        else {
+	  channel_nums.push_back(std::stoi(channel_strings[ch]));
+	  usrp->set_rx_antenna("TX/RX",ch);
+	}
     }
 
     //set the rx sample rate
@@ -76,6 +83,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
     std::cout << boost::format("Setting device timestamp to 0...") << std::endl;
     usrp->set_time_now(uhd::time_spec_t(0.0));
+
 
     //create a receive streamer
     uhd::stream_args_t stream_args("fc32", wire); //complex floats
@@ -87,11 +95,14 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::cout << boost::format(
         "Begin streaming %u samples, %f seconds in the future..."
     ) % total_num_samps % seconds_in_future << std::endl;
+
+    uhd::time_spec_t timespec_rx_tdd = uhd::time_spec_t(0,total_num_samps,rate);
+    uhd::time_spec_t timespec_tx_tdd = uhd::time_spec_t(0,total_num_samps,rate);
+
     uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
     stream_cmd.num_samps = total_num_samps;
     stream_cmd.stream_now = false;
     stream_cmd.time_spec = uhd::time_spec_t(seconds_in_future);
-    rx_stream->issue_stream_cmd(stream_cmd);
 
     //meta-data will be filled in by recv()
     uhd::rx_metadata_t md;
@@ -105,6 +116,12 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     //the first call to recv() will block this many seconds before receiving
     double timeout = seconds_in_future + 0.1; //timeout (delay before receive + padding)
 
+    std::signal(SIGINT, &sig_int_handler);
+    std::cout << "Press Ctrl + C to quit..." << std::endl;
+
+
+    do {
+    rx_stream->issue_stream_cmd(stream_cmd);
     size_t num_acc_samps = 0; //number of accumulated samples
     while(num_acc_samps < total_num_samps){
         //receive a single packet
@@ -123,14 +140,19 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
             ) % md.strerror()));
         }
 
-        if(verbose) std::cout << boost::format(
-            "Received packet: %u samples, %u full secs, %f frac secs"
-        ) % num_rx_samps % md.time_spec.get_full_secs() % md.time_spec.get_frac_secs() << std::endl;
-
         num_acc_samps += num_rx_samps;
     }
 
     if (num_acc_samps < total_num_samps) std::cerr << "Receive timeout before all samples received..." << std::endl;
+
+        if(verbose) std::cout << boost::format(
+            "Received packet: %u samples, %u full secs, %f frac secs"
+        ) % num_acc_samps % md.time_spec.get_full_secs() % md.time_spec.get_frac_secs() << std::endl;
+
+
+    stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
+
+    } while (not stop_signal_called);
 
     //finished
     std::cout << std::endl << "Done!" << std::endl << std::endl;
