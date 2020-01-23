@@ -24,10 +24,10 @@ void transmit_worker(
     //wave_table_class wave_table,
     float ampl,
     uhd::tx_streamer::sptr tx_stream,
-    size_t tdd_tx_samps,
     uhd::time_spec_t start_time, //time to start tx
-    uhd::time_spec_t timespec_rx_tdd, //time between tx bursts
-    uhd::time_spec_t timespec_tx_tdd, //time between tx bursts
+    size_t tdd_tx_samps,
+    size_t tdd_rx_samps,
+    double rate,
     //size_t step,
     //size_t index,
     int num_channels,
@@ -41,6 +41,9 @@ void transmit_worker(
   
   std::vector<std::complex<float> *> buffs(num_channels, &tx_buff.front());
 
+  uhd::time_spec_t timespec_rx_tdd = uhd::time_spec_t(0,tdd_rx_samps,rate);
+  uhd::time_spec_t timespec_tx_tdd = uhd::time_spec_t(0,tdd_tx_samps,rate);
+
     //setup metadata for the first tx packet
     uhd::tx_metadata_t tx_md;
     tx_md.start_of_burst = true;
@@ -51,9 +54,10 @@ void transmit_worker(
     double timeout = start_time.get_real_secs() + 0.1; 
  
     //send data until the signal handler gets called
-    size_t num_acc_tx_samps = 0; //number of accumulated samples
+
     while(not stop_signal_called){
 
+      size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
 
 	size_t samps_to_send = tdd_tx_samps - num_acc_tx_samps;
@@ -62,7 +66,7 @@ void transmit_worker(
 	else
 	  tx_md.end_of_burst = true;
 	
-	size_t num_tx_samps = tx_stream->send(&tx_buff.front(), tx_buff.size(), tx_md, timeout);
+	size_t num_tx_samps = tx_stream->send(&tx_buff.front(), samps_to_send, tx_md, timeout);
 
         //do not use time spec for subsequent packets
         tx_md.has_time_spec = false;
@@ -72,11 +76,12 @@ void transmit_worker(
 	timeout = 0.1;
 
         if (num_tx_samps < samps_to_send) std::cerr << "Send timeout..." << std::endl;
-	if(verbose) std::cout << boost::format("Sent packet: %u samples") % num_tx_samps << std::endl;
 
 	num_acc_tx_samps += num_tx_samps;
       }
 
+	if(verbose) std::cout << boost::format("TX packet: %u samples, %u full secs, %f frac s\
+ecs") % num_acc_tx_samps % tx_md.time_spec.get_full_secs() % tx_md.time_spec.get_frac_secs() << std::endl;
       // set time stamp for next burst
       tx_md.time_spec = tx_md.time_spec + timespec_rx_tdd + timespec_tx_tdd;
       tx_md.has_time_spec = true;
@@ -141,7 +146,11 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
         if(chan >= usrp->get_tx_num_channels() or chan >= usrp->get_rx_num_channels()){
             throw std::runtime_error("Invalid channel(s) specified.");
         }
-        else channel_nums.push_back(std::stoi(channel_strings[ch]));
+        else {
+	  channel_nums.push_back(std::stoi(channel_strings[ch]));
+	  usrp->set_rx_antenna("TX/RX",ch);
+	  usrp->set_tx_antenna("TX/RX",ch);
+	}
     }
 
     //set the tx sample rate
@@ -157,24 +166,25 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::cout << boost::format("Setting device timestamp to 0...") << std::endl;
     usrp->set_time_now(uhd::time_spec_t(0.0));
 
-    //create a transmit streamer
     uhd::stream_args_t stream_args("fc32", wire); 
-    stream_args.args["spp"] = str(boost::format("%d") % 1228800 );
+    stream_args.channels=channel_nums;
+    //stream_args.args["spp"] = str(boost::format("%d") % 1228800 );
+
+    //create a transmit streamer
     uhd::tx_streamer::sptr tx_stream = usrp->get_tx_stream(stream_args);
 
     //create a receive streamer
     uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
     //setup streaming
-    std::cout << std::endl;
-    std::cout << boost::format(
-        "Begin TDD streaming (%u TX %u RX samples), %f seconds in the future..."
-    ) % tdd_tx_samps % tdd_rx_samps % seconds_in_future << std::endl;
-
     uhd::time_spec_t timespec_rx_start = uhd::time_spec_t(seconds_in_future);
     uhd::time_spec_t timespec_rx_tdd = uhd::time_spec_t(0,tdd_rx_samps,rate);
     uhd::time_spec_t timespec_tx_start = timespec_rx_start + timespec_rx_tdd;
     uhd::time_spec_t timespec_tx_tdd = uhd::time_spec_t(0,tdd_tx_samps,rate);
+
+    std::cout << std::endl;
+    std::cout << boost::format("Begin TDD streaming (%u TX %u RX samples) at %f (TX) and %d (RX) seconds") % tdd_tx_samps % tdd_rx_samps % timespec_tx_start.get_real_secs() % timespec_rx_start.get_real_secs() << std::endl;
+
     
     uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
     stream_cmd.num_samps = tdd_rx_samps;
@@ -190,7 +200,8 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     for (size_t ch = 0; ch < rx_stream->get_num_channels(); ch++)
         rx_buffs.push_back(&rx_buff.front()); //same buffer for each channel
 
-    std::cout << boost::format("rx buffer size %d") % (rx_stream->get_max_num_samps()) << std::endl << std::endl;
+    std::cout << std::endl;
+    std::cout << boost::format("rx/tx buffer size %d/%d") % rx_stream->get_max_num_samps() % tx_stream->get_max_num_samps() << std::endl << std::endl;
 
 
     //the first call to recv() will block this many seconds before receiving
@@ -201,7 +212,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
     //start transmit worker thread
     boost::thread_group transmit_thread;
-    //transmit_thread.create_thread(boost::bind(&transmit_worker, tx_buff, /*wave_table,*/ tx_stream, timespec_tx_start, timespec_rx_tdd,timespec_tx_tdd, rx_stream->get_num_channels(),verbose));
+    transmit_thread.create_thread(boost::bind(&transmit_worker, ampl, tx_stream, timespec_tx_start, tdd_tx_samps, tdd_rx_samps, rate, rx_stream->get_num_channels(),verbose));
 
     do {
         //receive a single packet
@@ -223,12 +234,14 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
             throw std::runtime_error(str(boost::format("Receiver error %s") % rx_md.strerror()));
 	  }
 	  
-	  if(verbose) std::cout << boost::format("Received packet: %u samples, %u full secs, %f frac secs") % num_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
 
 	  num_acc_rx_samps += num_rx_samps;
 	}
 
-	if (num_acc_rx_samps < tdd_rx_samps) std::cerr << "Receive timeout before all samples received..." << std::endl;
+	if (num_acc_rx_samps < tdd_rx_samps) std::cerr << boost::format("Receive timeout before all samples received (%d).") % num_acc_rx_samps << std::endl;
+	
+	if(verbose) std::cout << boost::format("RX packet: %u samples, %u full secs, %f frac secs") % num_acc_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
+
 
 	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
 
