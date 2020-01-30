@@ -23,6 +23,7 @@ void sig_int_handler(int){stop_signal_called = true;}
 void transmit_worker(
     //wave_table_class wave_table,
     float ampl,
+    uhd::usrp::multi_usrp::sptr usrp,
     uhd::tx_streamer::sptr tx_stream,
     uhd::time_spec_t start_time, //time to start tx
     size_t tdd_tx_samps,
@@ -52,10 +53,20 @@ void transmit_worker(
     tx_md.time_spec = start_time;
 
     double timeout = start_time.get_real_secs() + 0.1; 
+
+    usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
+
+    int gpio789=0;
  
     //send data until the signal handler gets called
 
     while(not stop_signal_called){
+
+      usrp->set_command_time(tx_md.time_spec-0.0001);
+      usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0xfff);
+      usrp->clear_command_time();
+
+      gpio789 = (gpio789+1)&7;
 
       size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
@@ -65,6 +76,7 @@ void transmit_worker(
 	  samps_to_send = tx_buff.size();
 	else
 	  tx_md.end_of_burst = true;
+
 	
 	size_t num_tx_samps = tx_stream->send(&tx_buff.front(), samps_to_send, tx_md, timeout);
 
@@ -150,6 +162,8 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 	  channel_nums.push_back(std::stoi(channel_strings[ch]));
 	  usrp->set_rx_antenna("TX/RX",ch);
 	  usrp->set_tx_antenna("TX/RX",ch);
+	  usrp->set_rx_freq(3.5e6,ch);
+	  usrp->set_tx_freq(3.5e6,ch);
 	}
     }
 
@@ -203,6 +217,8 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::cout << std::endl;
     std::cout << boost::format("rx/tx buffer size %d/%d") % rx_stream->get_max_num_samps() % tx_stream->get_max_num_samps() << std::endl << std::endl;
 
+    std::vector<std::string> gpio_banks = usrp->get_gpio_banks(0);
+    std::cout << boost::format("gpio banks %s") % gpio_banks[0] << std::endl << std::endl;
 
     //the first call to recv() will block this many seconds before receiving
     double timeout = seconds_in_future + 0.1; //timeout (delay before receive + padding)
@@ -212,9 +228,11 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
     //start transmit worker thread
     boost::thread_group transmit_thread;
-    transmit_thread.create_thread(boost::bind(&transmit_worker, ampl, tx_stream, timespec_tx_start, tdd_tx_samps, tdd_rx_samps, rate, rx_stream->get_num_channels(),verbose));
+    transmit_thread.create_thread(boost::bind(&transmit_worker, ampl, usrp, tx_stream, timespec_tx_start, tdd_tx_samps, tdd_rx_samps, rate, rx_stream->get_num_channels(),verbose));
 
     do {
+      sleep(1);
+      /*
         //receive a single packet
         rx_stream->issue_stream_cmd(stream_cmd);
 
@@ -244,7 +262,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
 
 	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
-
+      */
     } while (not stop_signal_called);
 
     //finished
