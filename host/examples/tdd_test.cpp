@@ -54,19 +54,9 @@ void transmit_worker(
 
     double timeout = start_time.get_real_secs() + 0.1; 
 
-    usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
-
-    int gpio789=0;
- 
     //send data until the signal handler gets called
 
     while(not stop_signal_called){
-
-      usrp->set_command_time(tx_md.time_spec-0.0001);
-      usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0xfff);
-      usrp->clear_command_time();
-
-      gpio789 = (gpio789+1)&7;
 
       size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
@@ -220,6 +210,13 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::vector<std::string> gpio_banks = usrp->get_gpio_banks(0);
     std::cout << boost::format("gpio banks %s") % gpio_banks[0] << std::endl << std::endl;
 
+
+    usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
+    usrp->set_gpio_attr("FP0", "CTRL", 0x7f, 0xfff);
+    usrp->set_gpio_attr("FP0", "ATR_TX", 1<<5, 0x7f);
+
+    int gpio789=0;
+ 
     //the first call to recv() will block this many seconds before receiving
     double timeout = seconds_in_future + 0.1; //timeout (delay before receive + padding)
 
@@ -231,8 +228,6 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     transmit_thread.create_thread(boost::bind(&transmit_worker, ampl, usrp, tx_stream, timespec_tx_start, tdd_tx_samps, tdd_rx_samps, rate, rx_stream->get_num_channels(),verbose));
 
     do {
-      sleep(1);
-      /*
         //receive a single packet
         rx_stream->issue_stream_cmd(stream_cmd);
 
@@ -260,9 +255,13 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 	
 	if(verbose) std::cout << boost::format("RX packet: %u samples, %u full secs, %f frac secs") % num_acc_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
 
+	usrp->set_command_time(stream_cmd.time_spec+timespec_rx_tdd);
+	usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0xf80);
+	usrp->clear_command_time();
+	
+	gpio789 = (gpio789+1)&7;
 
 	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
-      */
     } while (not stop_signal_called);
 
     //finished
