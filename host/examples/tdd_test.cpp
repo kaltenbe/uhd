@@ -53,10 +53,13 @@ void transmit_worker(
     tx_md.time_spec = start_time;
 
     double timeout = start_time.get_real_secs() + 0.1; 
+    int gpio789=0;
 
     //send data until the signal handler gets called
 
     while(not stop_signal_called){
+        usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0xf80);
+        gpio789 = (gpio789+1)&7;
 
       size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
@@ -212,10 +215,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
 
     usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
-    usrp->set_gpio_attr("FP0", "CTRL", 0x7f, 0xfff);
-    usrp->set_gpio_attr("FP0", "ATR_TX", 1<<5, 0x7f);
+    usrp->set_gpio_attr("FP0", "CTRL", 0xfff, 0xfff);
+    //usrp->set_gpio_attr("FP0", "ATR_TX", 1<<5, 0x7f);
 
-    int gpio789=0;
+    //int gpio789=0;
  
     //the first call to recv() will block this many seconds before receiving
     double timeout = seconds_in_future + 0.1; //timeout (delay before receive + padding)
@@ -255,13 +258,13 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 	
 	if(verbose) std::cout << boost::format("RX packet: %u samples, %u full secs, %f frac secs") % num_acc_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
 
-	usrp->set_command_time(stream_cmd.time_spec+timespec_rx_tdd);
+/*	usrp->set_command_time(stream_cmd.time_spec+timespec_rx_tdd);
 	usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0xf80);
 	usrp->clear_command_time();
 	
 	gpio789 = (gpio789+1)&7;
 
-	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
+*/	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
     } while (not stop_signal_called);
 
     //finished
