@@ -58,8 +58,18 @@ void transmit_worker(
     //send data until the signal handler gets called
 
     while(not stop_signal_called){
-        usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0xf80);
-        gpio789 = (gpio789+1)&7;
+
+      // option 1: implement using set_command time
+      /*
+      usrp->set_command_time(tx_md.time_spec-0.0001);
+      usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0x380);
+      usrp->clear_command_time();
+      */
+
+      //option 2: implement using ATR
+      usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0x380);
+      usrp->set_gpio_attr("FP0", "ATR_RX", (~gpio789)<<7, 0x380);
+      gpio789 = (gpio789+1)&7;
 
       size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
@@ -213,10 +223,12 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::vector<std::string> gpio_banks = usrp->get_gpio_banks(0);
     std::cout << boost::format("gpio banks %s") % gpio_banks[0] << std::endl << std::endl;
 
-
+    // set data direction register to out
     usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
+    // option 1: set control to manual
+    //usrp->set_gpio_attr("FP0", "CTRL", 0x0, 0xfff);
+    // option 2: set control to ATR
     usrp->set_gpio_attr("FP0", "CTRL", 0xfff, 0xfff);
-    //usrp->set_gpio_attr("FP0", "ATR_TX", 1<<5, 0x7f);
 
     //int gpio789=0;
  
@@ -258,13 +270,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 	
 	if(verbose) std::cout << boost::format("RX packet: %u samples, %u full secs, %f frac secs") % num_acc_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
 
-/*	usrp->set_command_time(stream_cmd.time_spec+timespec_rx_tdd);
-	usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0xf80);
-	usrp->clear_command_time();
-	
-	gpio789 = (gpio789+1)&7;
-
-*/	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
+	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
     } while (not stop_signal_called);
 
     //finished
