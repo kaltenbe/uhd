@@ -29,16 +29,19 @@ void transmit_worker(
     size_t tdd_tx_samps,
     size_t tdd_rx_samps,
     double rate,
-    //size_t step,
+    //size_t stepstart_of_burst
     //size_t index,
     int num_channels,
     int verbose
 ){
 
   //allocate buffer with data to send
+  //size_t buffer_size = 1536;
   std::vector<std::complex<float> > tx_buff(tx_stream->get_max_num_samps(), std::complex<float>(ampl, ampl));
+  //std::vector<std::complex<float> > tx_buff(buffer_size, std::complex<float>(ampl, ampl));
 
-  std::cout << boost::format("tx buffer size %d") % (tx_stream->get_max_num_samps()) << std::endl << std::endl;
+  //std::cout << boost::format("tx buffer size %d") % (tx_stream->get_max_num_samps()) << std::endl << std::endl;
+  std::cout << boost::format("tx buffer size %d") % (tx_buff.size()) << std::endl << std::endl;
   
   std::vector<std::complex<float> *> buffs(num_channels, &tx_buff.front());
 
@@ -60,16 +63,16 @@ void transmit_worker(
     while(not stop_signal_called){
 
       // option 1: implement using set_command time
-      /*
-      usrp->set_command_time(tx_md.time_spec-0.0001);
+      
+      usrp->set_command_time(tx_md.time_spec);
       usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0x380);
       usrp->clear_command_time();
-      */
+      gpio789 = (gpio789+1)&7; 
 
       //option 2: implement using ATR
-      usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0x380);
+      /*usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0x380);
       usrp->set_gpio_attr("FP0", "ATR_RX", (~gpio789)<<7, 0x380);
-      gpio789 = (gpio789+1)&7;
+      gpio789 = (gpio789+1)&7;*/
 
       size_t num_acc_tx_samps = 0; //number of accumulated samples
       while(num_acc_tx_samps < tdd_tx_samps){
@@ -79,6 +82,17 @@ void transmit_worker(
 	  samps_to_send = tx_buff.size();
 	else
 	  tx_md.end_of_burst = true;
+
+	/*if(num_acc_tx_samps%(tdd_rx_samps/10) == 0){
+	
+	usrp->set_gpio_attr("FP0", "ATR_TX", gpio789<<7, 0x380);
+        usrp->set_gpio_attr("FP0", "ATR_RX", (~gpio789)<<7, 0x380);
+        gpio789 = (gpio789+1)&7;
+       usrp->set_command_time(tx_md.time_spec);
+       usrp->set_gpio_attr("FP0", "OUT", gpio789<<7, 0x380);
+        usrp->clear_command_time();
+        gpio789 = (gpio789+1)&7;
+	}*/
 
 	
 	size_t num_tx_samps = tx_stream->send(&tx_buff.front(), samps_to_send, tx_md, timeout);
@@ -99,8 +113,10 @@ void transmit_worker(
 ecs") % num_acc_tx_samps % tx_md.time_spec.get_full_secs() % tx_md.time_spec.get_frac_secs() << std::endl;
       // set time stamp for next burst
       tx_md.time_spec = tx_md.time_spec + timespec_rx_tdd + timespec_tx_tdd;
+      //tx_md.start_of_burst = true;
+      //tx_md.end_of_burst = false;
       tx_md.has_time_spec = true;
-
+ 
     }
 
 }
@@ -163,10 +179,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
         }
         else {
 	  channel_nums.push_back(std::stoi(channel_strings[ch]));
-	  usrp->set_rx_antenna("TX/RX",ch);
-	  usrp->set_tx_antenna("TX/RX",ch);
-	  usrp->set_rx_freq(3.5e6,ch);
-	  usrp->set_tx_freq(3.5e6,ch);
+	  //usrp->set_rx_antenna("TX/RX",ch);
+	  //usrp->set_tx_antenna("RX",ch);
+	  usrp->set_rx_freq(300e6,ch);
+	  usrp->set_tx_freq(300e6,ch);
 	}
     }
 
@@ -202,11 +218,12 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     std::cout << std::endl;
     std::cout << boost::format("Begin TDD streaming (%u TX %u RX samples) at %f (TX) and %d (RX) seconds") % tdd_tx_samps % tdd_rx_samps % timespec_tx_start.get_real_secs() % timespec_rx_start.get_real_secs() << std::endl;
 
-    
-    uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
+    double settling_time = 0.2; 
+    uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
     stream_cmd.num_samps = tdd_rx_samps;
     stream_cmd.stream_now = false;
-    stream_cmd.time_spec = timespec_rx_start;
+    stream_cmd.time_spec = uhd::time_spec_t(settling_time); 
+    rx_stream->issue_stream_cmd(stream_cmd);
 
     //meta-data will be filled in by recv()
     uhd::rx_metadata_t rx_md;
@@ -226,9 +243,9 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
     // set data direction register to out
     usrp->set_gpio_attr("FP0", "DDR", 0xfff, 0xfff);
     // option 1: set control to manual
-    //usrp->set_gpio_attr("FP0", "CTRL", 0x0, 0xfff);
+    usrp->set_gpio_attr("FP0", "CTRL", 0x0, 0xfff);
     // option 2: set control to ATR
-    usrp->set_gpio_attr("FP0", "CTRL", 0xfff, 0xfff);
+    //usrp->set_gpio_attr("FP0", "CTRL", 0xfff, 0xfff);
 
     //int gpio789=0;
  
@@ -244,7 +261,6 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
     do {
         //receive a single packet
-        rx_stream->issue_stream_cmd(stream_cmd);
 
 	size_t num_acc_rx_samps = 0; //number of accumulated samples
 	while(num_acc_rx_samps < tdd_rx_samps){
@@ -270,8 +286,12 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 	
 	if(verbose) std::cout << boost::format("RX packet: %u samples, %u full secs, %f frac secs") % num_acc_rx_samps % rx_md.time_spec.get_full_secs() % rx_md.time_spec.get_frac_secs() << std::endl;
 
-	stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
+	//stream_cmd.time_spec = stream_cmd.time_spec + timespec_tx_tdd + timespec_rx_tdd;
     } while (not stop_signal_called);
+    
+
+    stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
+    rx_stream->issue_stream_cmd(stream_cmd);
 
     //finished
     std::cout << std::endl << "Done!" << std::endl << std::endl;
