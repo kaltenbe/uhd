@@ -28,7 +28,8 @@ set(example_sources
     latency_test.cpp
     gpio.cpp
     sync_to_gps.cpp
-tdd_test.cpp
+    tdd_test.cpp
+    tdd_test_v2.cpp
 )
 
 if(ENABLE_RFNOC)
